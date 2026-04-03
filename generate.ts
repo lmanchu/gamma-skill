@@ -12,16 +12,69 @@
  *   GAMMA_API_KEY  — Gamma API key (required)
  */
 
-const GAMMA_API = 'https://public-api.gamma.app/v1.0'
+const GAMMA_API_DIRECT = 'https://public-api.gamma.app/v1.0'
 const CONFIG_PATH = `${process.env.HOME}/.gamma/config.json`
 
-async function readManagedKey(): Promise<string | null> {
+// Resolve API endpoint and key
+// Priority: BYOK > Proxy (GAMMA_PROXY_URL) > Managed config
+interface ApiConfig {
+  baseUrl: string
+  apiKey: string
+  headerName: string // 'X-API-KEY' for direct, 'Authorization' for proxy
+  headerValue: string
+  mode: 'byok' | 'proxy' | 'managed'
+}
+
+async function resolveApiConfig(): Promise<ApiConfig> {
+  // 1. BYOK: direct Gamma API key
+  if (process.env.GAMMA_API_KEY) {
+    return {
+      baseUrl: GAMMA_API_DIRECT,
+      apiKey: process.env.GAMMA_API_KEY,
+      headerName: 'X-API-KEY',
+      headerValue: process.env.GAMMA_API_KEY,
+      mode: 'byok',
+    }
+  }
+
+  // 2. Proxy mode: route through CLIProxyAPI gamma-proxy sidecar
+  const proxyUrl = process.env.GAMMA_PROXY_URL || ''
+  const proxyKey = process.env.GAMMA_PROXY_KEY || process.env.ANTHROPIC_API_KEY || ''
+  if (proxyUrl && proxyKey) {
+    return {
+      baseUrl: proxyUrl.replace(/\/$/, ''),
+      apiKey: proxyKey,
+      headerName: 'Authorization',
+      headerValue: `Bearer ${proxyKey}`,
+      mode: 'proxy',
+    }
+  }
+
+  // 3. Managed config (local ~/.gamma/config.json)
   try {
     const config = JSON.parse(await Bun.file(CONFIG_PATH).text())
-    return config.api_key || null
-  } catch {
-    return null
-  }
+    if (config.api_key) {
+      return {
+        baseUrl: GAMMA_API_DIRECT,
+        apiKey: config.api_key,
+        headerName: 'X-API-KEY',
+        headerValue: config.api_key,
+        mode: 'managed',
+      }
+    }
+    // Check if config has proxy settings
+    if (config.proxy_url && config.proxy_key) {
+      return {
+        baseUrl: config.proxy_url.replace(/\/$/, ''),
+        apiKey: config.proxy_key,
+        headerName: 'Authorization',
+        headerValue: `Bearer ${config.proxy_key}`,
+        mode: 'proxy',
+      }
+    }
+  } catch {}
+
+  return null as any // will be caught in main()
 }
 
 interface GenerateOptions {
@@ -51,7 +104,7 @@ function parseArgs(): GenerateOptions {
   return opts
 }
 
-async function createGeneration(apiKey: string, inputText: string, opts: GenerateOptions): Promise<string> {
+async function createGeneration(api: ApiConfig, inputText: string, opts: GenerateOptions): Promise<string> {
   const body: Record<string, any> = {
     inputText,
     textMode: opts.textMode || 'generate',
@@ -61,10 +114,14 @@ async function createGeneration(apiKey: string, inputText: string, opts: Generat
   if (opts.pages) body.numCards = opts.pages
   if (opts.cardSplit) body.cardSplit = opts.cardSplit
 
-  const res = await fetch(`${GAMMA_API}/generations`, {
+  const endpoint = api.mode === 'proxy'
+    ? `${api.baseUrl}/v1/gamma/generations`
+    : `${api.baseUrl}/generations`
+
+  const res = await fetch(endpoint, {
     method: 'POST',
     headers: {
-      'X-API-KEY': apiKey,
+      [api.headerName]: api.headerValue,
       'Content-Type': 'application/json',
     },
     body: JSON.stringify(body),
@@ -79,15 +136,19 @@ async function createGeneration(apiKey: string, inputText: string, opts: Generat
   return data.generationId
 }
 
-async function pollGeneration(apiKey: string, generationId: string, maxWait = 180000): Promise<{
+async function pollGeneration(api: ApiConfig, generationId: string, maxWait = 180000): Promise<{
   gammaUrl: string
   exportUrl: string | null
   title: string
 }> {
   const start = Date.now()
   while (Date.now() - start < maxWait) {
-    const res = await fetch(`${GAMMA_API}/generations/${generationId}`, {
-      headers: { 'X-API-KEY': apiKey },
+    const endpoint = api.mode === 'proxy'
+      ? `${api.baseUrl}/v1/gamma/generations/${generationId}`
+      : `${api.baseUrl}/generations/${generationId}`
+
+    const res = await fetch(endpoint, {
+      headers: { [api.headerName]: api.headerValue },
     })
 
     if (!res.ok) {
@@ -121,11 +182,13 @@ async function downloadFile(url: string, outputPath: string): Promise<boolean> {
 }
 
 async function main() {
-  const apiKey = process.env.GAMMA_API_KEY || await readManagedKey()
-  if (!apiKey) {
-    console.error('Error: No Gamma API key found.')
-    console.error('  BYOK: export GAMMA_API_KEY=sk-gamma-...')
+  const api = await resolveApiConfig()
+  if (!api) {
+    console.error('Error: No Gamma API key or proxy found.')
+    console.error('  BYOK:    export GAMMA_API_KEY=sk-gamma-...')
+    console.error('  Proxy:   export GAMMA_PROXY_URL=http://127.0.0.1:8318 GAMMA_PROXY_KEY=magi-proxy-key-2026')
     console.error('  Managed: add key to ~/.gamma/config.json')
+    console.error('  Config:  add proxy_url+proxy_key to ~/.gamma/config.json')
     process.exit(1)
   }
 
@@ -169,12 +232,12 @@ Options:
     opts.output = `/tmp/gamma-output.${ext}`
   }
 
-  console.log(`Creating presentation (textMode: ${opts.textMode}, exportAs: ${opts.format})...`)
-  const generationId = await createGeneration(apiKey, inputText, opts)
+  console.log(`Creating presentation (mode: ${api.mode}, textMode: ${opts.textMode}, exportAs: ${opts.format})...`)
+  const generationId = await createGeneration(api, inputText, opts)
   console.log(`Generation ID: ${generationId}`)
 
   console.log('Waiting for completion...')
-  const result = await pollGeneration(apiKey, generationId)
+  const result = await pollGeneration(api, generationId)
   console.log(`Done! Title: ${result.title}`)
   console.log(`Gamma URL: ${result.gammaUrl}`)
 
