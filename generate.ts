@@ -5,8 +5,8 @@
  *
  * Usage:
  *   bun run generate.ts --topic "AI Agent Economy" --output ./slides.pdf
- *   bun run generate.ts --topic "Q2 Planning" --format pptx --pages 10
- *   bun run generate.ts --content "$(cat brief.md)" --output ./deck.pdf
+ *   bun run generate.ts --content "$(cat brief.md)" --format pptx --output ./deck.pptx
+ *   bun run generate.ts --content-file ./outline.md --text-mode preserve --card-split inputTextBreaks --output ./talk.pdf
  *
  * Env:
  *   GAMMA_API_KEY  — Gamma API key (required)
@@ -27,35 +27,47 @@ async function readManagedKey(): Promise<string | null> {
 interface GenerateOptions {
   topic?: string
   content?: string
+  contentFile?: string
   format?: 'pdf' | 'pptx'
   pages?: number
   output?: string
+  textMode?: 'generate' | 'condense' | 'preserve'
+  cardSplit?: 'auto' | 'inputTextBreaks'
 }
 
 function parseArgs(): GenerateOptions {
   const args = process.argv.slice(2)
-  const opts: GenerateOptions = { format: 'pdf' }
+  const opts: GenerateOptions = { format: 'pdf', textMode: 'generate' }
   for (let i = 0; i < args.length; i++) {
     if (args[i] === '--topic' && args[i + 1]) opts.topic = args[++i]
     else if (args[i] === '--content' && args[i + 1]) opts.content = args[++i]
+    else if (args[i] === '--content-file' && args[i + 1]) opts.contentFile = args[++i]
     else if (args[i] === '--format' && args[i + 1]) opts.format = args[++i] as 'pdf' | 'pptx'
     else if (args[i] === '--pages' && args[i + 1]) opts.pages = parseInt(args[++i])
     else if (args[i] === '--output' && args[i + 1]) opts.output = args[++i]
+    else if (args[i] === '--text-mode' && args[i + 1]) opts.textMode = args[++i] as GenerateOptions['textMode']
+    else if (args[i] === '--card-split' && args[i + 1]) opts.cardSplit = args[++i] as GenerateOptions['cardSplit']
   }
   return opts
 }
 
-async function createGeneration(apiKey: string, inputText: string): Promise<string> {
+async function createGeneration(apiKey: string, inputText: string, opts: GenerateOptions): Promise<string> {
+  const body: Record<string, any> = {
+    inputText,
+    textMode: opts.textMode || 'generate',
+    format: 'presentation',
+    exportAs: opts.format || 'pdf',
+  }
+  if (opts.pages) body.numCards = opts.pages
+  if (opts.cardSplit) body.cardSplit = opts.cardSplit
+
   const res = await fetch(`${GAMMA_API}/generations`, {
     method: 'POST',
     headers: {
       'X-API-KEY': apiKey,
       'Content-Type': 'application/json',
     },
-    body: JSON.stringify({
-      inputText,
-      textMode: 'AUTO',
-    }),
+    body: JSON.stringify(body),
   })
 
   if (!res.ok) {
@@ -67,8 +79,9 @@ async function createGeneration(apiKey: string, inputText: string): Promise<stri
   return data.generationId
 }
 
-async function pollGeneration(apiKey: string, generationId: string, maxWait = 120000): Promise<{
+async function pollGeneration(apiKey: string, generationId: string, maxWait = 180000): Promise<{
   gammaUrl: string
+  exportUrl: string | null
   title: string
 }> {
   const start = Date.now()
@@ -86,6 +99,7 @@ async function pollGeneration(apiKey: string, generationId: string, maxWait = 12
     if (data.status === 'completed') {
       return {
         gammaUrl: data.gammaUrl || data.url,
+        exportUrl: data.exportUrl || null,
         title: data.title || 'presentation',
       }
     }
@@ -93,34 +107,21 @@ async function pollGeneration(apiKey: string, generationId: string, maxWait = 12
       throw new Error(`Generation failed: ${data.error || 'unknown'}`)
     }
 
-    // Wait 3 seconds before next poll
-    await new Promise(r => setTimeout(r, 3000))
+    await new Promise(r => setTimeout(r, 5000))
   }
   throw new Error('Generation timed out after ' + (maxWait / 1000) + 's')
 }
 
-async function downloadPresentation(gammaUrl: string, format: string, outputPath: string): Promise<string> {
-  // Gamma export endpoint
-  const exportUrl = `${gammaUrl}/export/${format}`
-  console.log(`Downloading ${format} from: ${exportUrl}`)
-
-  const res = await fetch(exportUrl, { redirect: 'follow' })
-  if (!res.ok) {
-    // Try alternate download approach — Gamma web export
-    console.log(`Direct export failed (${res.status}), trying web export...`)
-    // For now, return the gammaUrl for manual download
-    return gammaUrl
-  }
-
+async function downloadFile(url: string, outputPath: string): Promise<boolean> {
+  const res = await fetch(url, { redirect: 'follow' })
+  if (!res.ok) return false
   const buffer = await res.arrayBuffer()
   await Bun.write(outputPath, buffer)
-  return outputPath
+  return true
 }
 
 async function main() {
-  // API key resolution: BYOK > managed config > env
-  const apiKey = process.env.GAMMA_API_KEY
-    || await readManagedKey()
+  const apiKey = process.env.GAMMA_API_KEY || await readManagedKey()
   if (!apiKey) {
     console.error('Error: No Gamma API key found.')
     console.error('  BYOK: export GAMMA_API_KEY=sk-gamma-...')
@@ -129,17 +130,47 @@ async function main() {
   }
 
   const opts = parseArgs()
+
+  // Read content from file if specified
+  if (opts.contentFile) {
+    opts.content = await Bun.file(opts.contentFile).text()
+  }
+
   if (!opts.topic && !opts.content) {
     console.log(`Usage:
-  bun run generate.ts --topic "Topic" [--format pdf|pptx] [--pages N] [--output path]
-  bun run generate.ts --content "Full content" [--format pdf|pptx] [--output path]`)
+  bun run generate.ts --topic "Topic" [options]
+  bun run generate.ts --content "Full content" [options]
+  bun run generate.ts --content-file ./outline.md [options]
+
+Options:
+  --format pdf|pptx       Export format (default: pdf)
+  --pages N               Target number of slides
+  --output path           Output file path
+  --text-mode MODE        generate|condense|preserve (default: generate)
+  --card-split MODE       auto|inputTextBreaks (split on --- separators)`)
     process.exit(1)
   }
 
-  const inputText = opts.content || `Create a presentation about: ${opts.topic}${opts.pages ? `. Target ${opts.pages} slides.` : ''}`
+  let inputText: string
+  if (opts.content) {
+    inputText = opts.content
+  } else {
+    inputText = `Create a presentation about: ${opts.topic}${opts.pages ? `. Target ${opts.pages} slides.` : ''}`
+  }
 
-  console.log('Creating presentation...')
-  const generationId = await createGeneration(apiKey, inputText)
+  // Auto-detect: if content has --- separators and no explicit card-split, suggest preserve+inputTextBreaks
+  if (opts.content && opts.content.includes('\n---\n') && !opts.cardSplit && opts.textMode === 'generate') {
+    console.log('Detected --- separators in content. Tip: use --text-mode preserve --card-split inputTextBreaks to keep exact slide breaks.')
+  }
+
+  // Default output path if not specified
+  if (!opts.output) {
+    const ext = opts.format || 'pdf'
+    opts.output = `/tmp/gamma-output.${ext}`
+  }
+
+  console.log(`Creating presentation (textMode: ${opts.textMode}, exportAs: ${opts.format})...`)
+  const generationId = await createGeneration(apiKey, inputText, opts)
   console.log(`Generation ID: ${generationId}`)
 
   console.log('Waiting for completion...')
@@ -147,22 +178,35 @@ async function main() {
   console.log(`Done! Title: ${result.title}`)
   console.log(`Gamma URL: ${result.gammaUrl}`)
 
-  if (opts.output) {
-    const format = opts.format || 'pdf'
-    const downloaded = await downloadPresentation(result.gammaUrl, format, opts.output)
-    if (downloaded === result.gammaUrl) {
-      console.log(`Download: open ${result.gammaUrl} and export manually`)
-    } else {
-      console.log(`Saved to: ${downloaded}`)
+  // Download the export
+  let downloaded = false
+  if (result.exportUrl) {
+    console.log(`Export URL: ${result.exportUrl}`)
+    downloaded = await downloadFile(result.exportUrl, opts.output)
+    if (downloaded) {
+      console.log(`Saved to: ${opts.output}`)
     }
   }
 
-  // Output JSON for skill consumption
+  if (!downloaded) {
+    // Fallback: try gammaUrl-based export
+    const fallbackUrl = `${result.gammaUrl}/export/${opts.format}`
+    downloaded = await downloadFile(fallbackUrl, opts.output)
+    if (downloaded) {
+      console.log(`Saved to: ${opts.output}`)
+    } else {
+      console.log(`Download failed. Open ${result.gammaUrl} to export manually.`)
+    }
+  }
+
+  // Output JSON for skill/pipeline consumption
   console.log(JSON.stringify({
     generationId,
     gammaUrl: result.gammaUrl,
+    exportUrl: result.exportUrl,
     title: result.title,
-    output: opts.output || null,
+    output: downloaded ? opts.output : null,
+    downloaded,
   }))
 }
 
