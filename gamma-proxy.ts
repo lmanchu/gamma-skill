@@ -10,12 +10,12 @@
  *
  * Client:
  *   curl -X POST http://127.0.0.1:8318/v1/gamma/generations \
- *     -H "Authorization: Bearer magi-proxy-key-2026" \
+ *     -H "Authorization: Bearer your-proxy-key" \
  *     -H "Content-Type: application/json" \
  *     -d '{"inputText":"About AI","textMode":"generate","exportAs":"pdf"}'
  *
  *   curl http://127.0.0.1:8318/v1/gamma/generations/{id} \
- *     -H "Authorization: Bearer magi-proxy-key-2026"
+ *     -H "Authorization: Bearer your-proxy-key"
  */
 
 const PORT = 8318
@@ -30,7 +30,7 @@ interface Config {
 
 async function loadConfig(): Promise<Config> {
   // MAGI proxy key from CLIProxyAPI config
-  const magiKey = 'magi-proxy-key-2026'
+  const magiKey = process.env.GAMMA_PROXY_AUTH_KEY || 'change-me'
 
   // Gamma key from managed config
   let gammaKey = process.env.GAMMA_API_KEY || ''

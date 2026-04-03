@@ -186,7 +186,7 @@ async function main() {
   if (!api) {
     console.error('Error: No Gamma API key or proxy found.')
     console.error('  BYOK:    export GAMMA_API_KEY=sk-gamma-...')
-    console.error('  Proxy:   export GAMMA_PROXY_URL=http://127.0.0.1:8318 GAMMA_PROXY_KEY=magi-proxy-key-2026')
+    console.error('  Proxy:   export GAMMA_PROXY_URL=http://127.0.0.1:8318 GAMMA_PROXY_KEY=your-proxy-key')
     console.error('  Managed: add key to ~/.gamma/config.json')
     console.error('  Config:  add proxy_url+proxy_key to ~/.gamma/config.json')
     process.exit(1)
