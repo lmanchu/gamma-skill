@@ -24,6 +24,9 @@ export const CONFIG_PATH = join(CONFIG_DIR, 'config.json')
 const SCRIPT = 'scripts/generate.ts'
 // Exact command for this copy of the script, so messages can be pasted into Terminal as is.
 const RUN = `${process.platform === 'win32' ? '& ' : ''}"${process.execPath}" "${fileURLToPath(import.meta.url)}"`
+const TERMINAL = process.platform === 'win32' ? 'PowerShell' : 'Terminal'
+const CLIPBOARD_PIPE = process.platform === 'win32' ? 'Get-Clipboard |' : 'pbpaste |'
+const PASTE_KEYS = process.platform === 'win32' ? 'Ctrl+V or a right-click' : 'Cmd+V'
 
 const TEXT_MODES = ['generate', 'condense', 'preserve'] as const
 const CARD_SPLITS = ['auto', 'inputTextBreaks'] as const
@@ -142,7 +145,14 @@ async function readHiddenLine(prompt: string): Promise<string> {
   process.stdout.write(prompt)
   return new Promise((resolve, reject) => {
     let value = ''
-    stdin.setRawMode(true)
+    try {
+      stdin.setRawMode(true)
+    } catch {
+      return reject(new UsageError(
+        'This window cannot hide what you paste. Paste the command below but do not press Enter yet. ' +
+        `Then copy your key from Gamma, come back, and press Enter:\n  ${CLIPBOARD_PIPE} ${RUN} --setup`,
+      ))
+    }
     stdin.resume()
     stdin.setEncoding('utf8')
     const finish = (err?: Error) => {
@@ -174,7 +184,7 @@ async function readAllStdin(timeoutMs = 30_000): Promise<string> {
   let timer: ReturnType<typeof setTimeout> | undefined
   const timeout = new Promise<never>((_, reject) => {
     timer = setTimeout(() => reject(new UsageError(
-      'No key received. The person using this computer should run --setup in Terminal and paste the key when asked.',
+      `No key received. The person using this computer should run --setup in ${TERMINAL} and paste the key when asked.`,
     )), timeoutMs)
   })
   try {
@@ -185,9 +195,13 @@ async function readAllStdin(timeoutMs = 30_000): Promise<string> {
 }
 
 async function runSetup(): Promise<void> {
-  const raw = process.stdin.isTTY
+  const tty = Boolean(process.stdin.isTTY)
+  const raw = tty
     ? await readHiddenLine('Paste your Gamma API key and press Enter (nothing will show while you paste): ')
     : await readAllStdin()
+  if (tty && !raw.trim()) {
+    throw new UsageError(`Nothing was pasted. Copy the key again, paste it with ${PASTE_KEYS}, then press Enter.`)
+  }
   const { replaced, unusualPrefix } = await saveApiKey(raw)
   console.log(`${replaced ? 'Replaced the key in' : 'Saved the key to'} ${CONFIG_PATH} (readable only by you).`)
   if (unusualPrefix) console.log('Note: Gamma API keys usually start with "sk-gamma-". If --check fails, copy the key again.')
@@ -402,6 +416,34 @@ Options:
   --max-wait SECONDS         how long to wait before giving up (default: 600)
   --dry-run                  print the request that would be sent and stop (no credits)`
 
+// Codex (and so the IrisGo app) sets this in sandboxes that have no internet access.
+function blockedBySandbox(): boolean {
+  if (process.env.CODEX_SANDBOX_NETWORK_DISABLED !== '1') return false
+  console.error('This command ran inside a sandbox with no internet access, so nothing was sent to Gamma ' +
+    'and no credits were used. Run the same command again with approval to run outside the sandbox.')
+  process.exitCode = 3
+  return true
+}
+
+// Reads a content file as UTF-8. Accepts a UTF-8 or UTF-16LE byte order mark, which Windows
+// editors and PowerShell often add, and refuses other encodings instead of sending garbled text.
+export function decodeTextFile(bytes: Uint8Array, path: string): string {
+  const notUtf8 = new UsageError(`${path} is not saved as UTF-8. Save it again as UTF-8 ` +
+    '(in PowerShell: Set-Content -Encoding utf8) and retry.')
+  let text: string
+  try {
+    text = bytes[0] === 0xff && bytes[1] === 0xfe
+      ? new TextDecoder('utf-16le', { fatal: true }).decode(bytes.subarray(2))
+      : new TextDecoder('utf-8', { fatal: true }).decode(bytes)
+  } catch {
+    throw notUtf8
+  }
+  // NUL characters mean UTF-16 without a byte order mark (or UTF-32), not real text.
+  if (text.includes('\u0000')) throw notUtf8
+  // Windows line endings: keep "---" slide breaks recognizable.
+  return text.replace(/\r\n/g, '\n')
+}
+
 async function main(): Promise<void> {
   const opts = parseArgs(process.argv.slice(2))
 
@@ -411,7 +453,7 @@ async function main(): Promise<void> {
   const apiKey = await readApiKey()
   if (!apiKey && !opts.dryRun) {
     console.error('No Gamma API key found.')
-    console.error('The person using this computer should open Terminal and run:')
+    console.error(`The person using this computer should open ${TERMINAL} and run:`)
     console.error(`  ${RUN} --setup`)
     console.error('Never paste the key into a chat.')
     process.exitCode = 1
@@ -419,6 +461,7 @@ async function main(): Promise<void> {
   }
 
   if (opts.command === 'check') {
+    if (blockedBySandbox()) return
     const me = await gamma(apiKey!, 'GET', '/me')
     console.log('The key works.')
     console.log(`Workspace: ${me.workspaceName ?? '(unknown)'} | plan: ${me.planTier ?? '(unknown)'} | ` +
@@ -427,11 +470,12 @@ async function main(): Promise<void> {
   }
 
   if (opts.command === 'resume') {
+    if (blockedBySandbox()) return
     await finish(apiKey!, opts.resumeId!, opts)
     return
   }
 
-  if (opts.contentFile) opts.content = await readFile(opts.contentFile, 'utf8')
+  if (opts.contentFile) opts.content = decodeTextFile(await readFile(opts.contentFile), opts.contentFile)
   if (!opts.topic && !opts.content) throw new UsageError('Give --topic, --content, or --content-file.')
   const inputText = opts.content
     ?? `Create a presentation about: ${opts.topic}${opts.pages ? `. Target ${opts.pages} slides.` : ''}`
@@ -445,6 +489,7 @@ async function main(): Promise<void> {
     console.log(JSON.stringify({ endpoint: `POST ${GAMMA_API}/generations`, body }, null, 2))
     return
   }
+  if (blockedBySandbox()) return
 
   console.log(`Starting Gamma (textMode: ${opts.textMode}, export: ${body.exportAs}, sharing outside workspace: ${opts.externalAccess})...`)
   let created: any
@@ -453,8 +498,9 @@ async function main(): Promise<void> {
   } catch (e) {
     if (!(e instanceof ApiError)) {
       // No answer from Gamma: the deck may have been created anyway.
-      throw new Error(`${(e as Error).message}. Gamma may have started the deck anyway; ` +
-        'check gamma.app for a new deck before trying again.')
+      throw new Error(`${(e as Error).message}. If this ran inside a sandbox with no internet access, ` +
+        'nothing reached Gamma: run it again outside the sandbox. Otherwise Gamma may have started the deck ' +
+        'anyway; check gamma.app for a new deck before trying again.')
     }
     throw e
   }

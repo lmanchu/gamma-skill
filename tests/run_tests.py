@@ -18,9 +18,10 @@ def newhome(with_key=False, mode=0o600):
         os.makedirs(os.path.join(h,'.gamma')); p=os.path.join(h,'.gamma','config.json')
         open(p,'w').write(json.dumps({'api_key':KEY})); os.chmod(p,mode)
     return h
-def run(args, home, stdin=None, scenario='ok', preload=True):
-    env={k:v for k,v in os.environ.items() if k!='GAMMA_API_KEY'}
+def run(args, home, stdin=None, scenario='ok', preload=True, extra_env=None):
+    env={k:v for k,v in os.environ.items() if k not in ('GAMMA_API_KEY','CODEX_SANDBOX_NETWORK_DISABLED')}
     env['HOME']=home; env['MOCK_SCENARIO']=scenario; env['MOCK_LOG']=os.path.join(home,'mocklog.json')
+    env.update(extra_env or {})
     cmd=[BUN]+(['--preload',os.path.join(HERE,'mock-fetch.ts')] if preload else [])+[SCRIPT]+args
     p=subprocess.run(cmd,input=stdin,capture_output=True,text=True,env=env,timeout=60)
     return p
@@ -147,5 +148,60 @@ h=newhome(); p=run(['--setup'],h,stdin='abc123\n')
 check('unusual prefix note', p.returncode==0 and 'usually start with' in p.stdout, p.stdout)
 p=run(['--setup'],h,stdin='sk-gamma-a\x1bb\n'); check('control chars rejected', p.returncode==1 and 'control characters' in p.stderr, p.stderr)
 print('\nSUMMARY2', sum(1 for r in results if r[1]), '/', len(results))
+
+print('\n--- windows / sandbox cases')
+SB={'CODEX_SANDBOX_NETWORK_DISABLED':'1'}
+h=newhome(with_key=True); p=run(['--check'],h,extra_env=SB)
+check('sandbox: --check exits 3, no request', p.returncode==3 and 'no internet access' in p.stderr and mocklog(h)==[], p.stdout+p.stderr)
+p=run(['--topic','x'],h,extra_env=SB)
+check('sandbox: generate exits 3, no POST', p.returncode==3 and mocklog(h)==[], p.stdout+p.stderr)
+p=run(['--resume','gen123'],h,extra_env=SB)
+check('sandbox: resume exits 3, no request', p.returncode==3 and mocklog(h)==[], p.stdout+p.stderr)
+p=run(['--topic','x','--dry-run'],h,extra_env=SB)
+check('sandbox: dry-run still works', p.returncode==0 and '"inputText"' in p.stdout, p.stdout+p.stderr)
+h=newhome(); p=run(['--topic','x'],h,extra_env=SB)
+check('sandbox + no key: setup message first', p.returncode==1 and '--setup' in p.stderr, p.stderr)
+ZH='# 標題\n\n---\n\n## 第二頁 $5 "引號"\n'
+h=newhome(); f=os.path.join(h,'u16.md'); open(f,'wb').write(b'\xff\xfe'+ZH.encode('utf-16-le'))
+p=run(['--content-file',f,'--dry-run'],h)
+try: got=json.loads(p.stdout[p.stdout.index('{'):])['body']['inputText']
+except Exception: got=None
+check('content-file UTF-16LE BOM decoded', p.returncode==0 and got==ZH, p.stdout+p.stderr)
+f=os.path.join(h,'u8bom.md'); open(f,'wb').write(b'\xef\xbb\xbf'+ZH.encode('utf-8'))
+p=run(['--content-file',f,'--dry-run'],h)
+try: got=json.loads(p.stdout[p.stdout.index('{'):])['body']['inputText']
+except Exception: got=None
+check('content-file UTF-8 BOM stripped', p.returncode==0 and got==ZH, p.stdout+p.stderr)
+f=os.path.join(h,'big5.md'); open(f,'wb').write('# 標題\n'.encode('cp950'))
+p=run(['--content-file',f,'--dry-run'],h)
+check('content-file Big5 refused', p.returncode==1 and 'not saved as UTF-8' in p.stderr, p.stdout+p.stderr)
+f=os.path.join(h,'u16nobom.md'); open(f,'wb').write(ZH.encode('utf-16-le'))
+p=run(['--content-file',f,'--dry-run'],h)
+check('content-file UTF-16 without BOM refused', p.returncode==1 and 'not saved as UTF-8' in p.stderr, p.stdout+p.stderr)
+f=os.path.join(h,'crlf.md'); open(f,'wb').write(b'# A\r\n---\r\n## B\r\n')
+p=run(['--content-file',f,'--dry-run'],h)
+try: got=json.loads(p.stdout[p.stdout.index('{'):])['body']['inputText']
+except Exception: got=None
+check('content-file CRLF normalized + tip shown', p.returncode==0 and got=='# A\n---\n## B\n' and 'Tip:' in p.stdout, p.stdout+p.stderr)
+h=newhome(with_key=True); p=run(['--topic','x'],h,scenario='postnet')
+check('POST network error mentions sandbox case', p.returncode==1 and 'nothing reached Gamma' in p.stderr, p.stderr)
+# TTY: Enter with nothing pasted
+h=newhome(); env={k:v for k,v in os.environ.items() if k!='GAMMA_API_KEY'}; env['HOME']=h
+pid,fd=pty.fork()
+if pid==0:
+    os.execve(BUN,[BUN,SCRIPT,'--setup'],env)
+out=b''; t0=time.time(); sent=False
+while time.time()-t0<20:
+    r,_,_=select.select([fd],[],[],0.2)
+    if r:
+        try: chunk=os.read(fd,4096)
+        except OSError: break
+        if not chunk: break
+        out+=chunk
+    if not sent and b'Paste your Gamma API key' in out:
+        os.write(fd,b'\r'); sent=True
+_,status=os.waitpid(pid,0)
+check('tty empty paste -> clear hint, nothing saved', b'Nothing was pasted' in out and not os.path.exists(os.path.join(h,'.gamma','config.json')), out.decode(errors='ignore'))
+print('\nSUMMARY3', sum(1 for r in results if r[1]), '/', len(results))
 
 sys.exit(0 if all(r[1] for r in results) else 1)

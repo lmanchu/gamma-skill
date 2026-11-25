@@ -22,12 +22,49 @@ their own.
 
 ## Install
 
+### 繁體中文：在 IrisGo app 安裝（Windows）
+
+1. **註冊 Gamma**：到 [gamma.app](https://gamma.app) 用自己的 email 註冊，Free 方案就可以用。
+   建議到 Settings → Sharing，把新 gamma 的預設分享權限改成 **No access**。先不用建 API key，第 5 步再建。
+2. **打開 PowerShell**：按「開始」，輸入 `PowerShell`，點「Windows PowerShell」。
+   下面每一段指令都是：在這頁按指令框右上角的複製鈕，回到 PowerShell 視窗按 Ctrl+V（或按右鍵）貼上，再按 Enter。
+3. **裝 Bun**：貼上下面這行，按 Enter，等它跑完：
+   ```powershell
+   powershell -c "irm bun.sh/install.ps1 | iex"
+   ```
+   跑完會顯示 Bun 已安裝。如果出現紅字錯誤，或 Windows 跳出「智慧型應用程式控制」、「Windows 已保護您的電腦」
+   之類的警告，把畫面截圖給會用電腦的人看，先不要往下做。
+4. **下載這個 skill**：貼上下面這行，按 Enter。跑完後「下載」資料夾裡會有一個 `gamma-skill-main` 資料夾。
+   重跑也沒關係，會直接蓋過舊的。
+   ```powershell
+   Invoke-WebRequest https://github.com/lmanchu/gamma-skill/archive/refs/heads/main.zip -OutFile "$env:USERPROFILE\Downloads\gamma-skill.zip" -UseBasicParsing; Expand-Archive "$env:USERPROFILE\Downloads\gamma-skill.zip" "$env:USERPROFILE\Downloads" -Force
+   ```
+5. **建 key 並存起來**：照下面的順序做，剪貼簿裡的 key 才不會被別的東西蓋掉。
+   1. 先貼上下面這行，按 Enter。畫面會出現 `Paste your Gamma API key`，然後停住等你，這是正常的。
+      ```powershell
+      & "$env:USERPROFILE\.bun\bin\bun.exe" "$env:USERPROFILE\Downloads\gamma-skill-main\skills\gamma\scripts\generate.ts" --setup
+      ```
+   2. 到 [gamma.app/settings/api-keys](https://gamma.app/settings/api-keys) 建一把 key，按複製。
+   3. 回到 PowerShell 視窗按 Ctrl+V（或按右鍵）貼上。畫面不會顯示任何字，這是正常的。按 Enter。
+   4. 看到 `Saved the key` 就完成了。如果看到 `Nothing was pasted`，從第 1 小步重來。
+6. **測試**（不扣 credits）：
+   ```powershell
+   & "$env:USERPROFILE\.bun\bin\bun.exe" "$env:USERPROFILE\Downloads\gamma-skill-main\skills\gamma\scripts\generate.ts" --check
+   ```
+   看到 `The key works.` 和剩下的 credits 就成功了。如果看到紅字（例如「無法辨識」或 `Module not found`），
+   代表第 3 步或第 4 步沒完成，回去重做那一步。
+7. **匯入 IrisGo**：IrisGo → 設定 → 技能 → 匯入技能 → 選擇技能資料夾，
+   選 `下載\gamma-skill-main\skills\gamma`。IrisGo 會複製一份，之後 `gamma-skill-main` 可以刪掉。
+8. **開始用**：開新對話，例如「用 gamma skill 做一份 8 頁簡報，主題是○○，給○○看，匯出 PDF」。
+   每次做簡報，IrisGo 都可能跳出一張批准卡，請你允許在 sandbox 外連網執行，按允許即可。
+   做好的檔案會在「下載」資料夾，通常要等 1 到 3 分鐘。
+
 ### 繁體中文：在 IrisGo app 安裝（Mac）
 
 1. **註冊 Gamma**：到 [gamma.app](https://gamma.app) 用自己的 email 註冊，Free 方案就可以用。
-   建議到 Settings → Sharing，把新 gamma 的預設分享權限改成 **No access**。
-2. **建 API key**：到 [gamma.app/settings/api-keys](https://gamma.app/settings/api-keys) 建一把，按複製。
-3. **裝 Bun**：打開「終端機」（在 Launchpad 搜尋「終端機」），貼上下面這行，按 Enter，等它跑完：
+   建議到 Settings → Sharing，把新 gamma 的預設分享權限改成 **No access**。先不用建 API key，第 5 步再建。
+2. **打開終端機**：在 Launchpad 搜尋「終端機」並打開。下面每一段指令都是：複製、在終端機按 Cmd+V 貼上、按 Enter。
+3. **裝 Bun**：貼上下面這行，按 Enter，等它跑完：
    ```bash
    curl -fsSL https://bun.com/install | bash
    ```
@@ -35,11 +72,14 @@ their own.
 4. **下載這個 skill**：在這個 GitHub 頁面按綠色的 **Code** → **Download ZIP**。下載完雙擊 ZIP 解壓縮，
    「下載項目」裡會多一個 `gamma-skill-main` 資料夾。如果你下載過不只一次，資料夾名稱可能會變成
    `gamma-skill-main 2`；請先把舊的刪掉，只留一個叫 `gamma-skill-main` 的，下面的指令才找得到。
-5. **存 key**：在終端機貼上下面這行，按 Enter。看到提示後貼上剛剛複製的 key 再按 Enter。
-   貼上時畫面不會顯示任何字，這是正常的。
-   ```bash
-   ~/.bun/bin/bun ~/Downloads/gamma-skill-main/skills/gamma/scripts/generate.ts --setup
-   ```
+5. **建 key 並存起來**：照下面的順序做，剪貼簿裡的 key 才不會被別的東西蓋掉。
+   1. 先在終端機貼上下面這行，按 Enter。畫面會出現 `Paste your Gamma API key`，然後停住等你，這是正常的。
+      ```bash
+      ~/.bun/bin/bun ~/Downloads/gamma-skill-main/skills/gamma/scripts/generate.ts --setup
+      ```
+   2. 到 [gamma.app/settings/api-keys](https://gamma.app/settings/api-keys) 建一把 key，按複製。
+   3. 回到終端機按 Cmd+V 貼上。畫面不會顯示任何字，這是正常的。按 Enter。
+   4. 看到 `Saved the key` 就完成了。如果看到 `Nothing was pasted`，從第 1 小步重來。
 6. **測試**（不扣 credits）：
    ```bash
    ~/.bun/bin/bun ~/Downloads/gamma-skill-main/skills/gamma/scripts/generate.ts --check
@@ -52,7 +92,7 @@ their own.
    每次做簡報，IrisGo 都可能跳出一張批准卡，請你允許在 sandbox 外連網執行，按允許即可。
    做好的檔案會在「下載項目」，通常要等 1 到 3 分鐘。
 
-請記得：
+兩種電腦都請記得：
 - **key 不要貼進任何對話**（IrisGo、Claude、LINE 都一樣），也不要截圖。外流了就到 Gamma 的
   API Keys 頁面刪掉，再重做第 2、5 步。
 - **分享前逐頁看過**。Gamma 有時會自己加句子或數字，也會放假的 QR code、亂碼的 app 畫面，
@@ -79,7 +119,8 @@ from that folder. Agents that install skills from a GitHub URL can use
 
 `--setup` saves the key to `~/.gamma/config.json` and makes the file readable only
 by you (on Windows, normal user-folder permissions apply). It reads the key from a
-hidden prompt or from piped input (`pbpaste | bun scripts/generate.ts --setup`),
+hidden prompt or from piped input (`pbpaste | bun scripts/generate.ts --setup` on a
+Mac, `Get-Clipboard | & bun scripts/generate.ts --setup` in Windows PowerShell),
 so the key never shows on screen or in shell history. You can also set
 `GAMMA_API_KEY` in the environment; it takes priority over the file. Apps opened
 from the Dock usually do not see variables set in `.zshrc`, so the IrisGo app
